@@ -36,8 +36,8 @@ chrome.tabs.onUpdated.addListener(prepareFlashItemsDebounced);
 prepareFlashItemsDebounced();
 
 async function prepareFlashItems() {
-  const [url, allItems] = await Promise.all([getCurrentUrl(), ensureItems()]);
-  const items = filterDomainItems(allItems, url, 50);
+  const allItems = await ensureItems();
+  const items = createGlobalHistoryItems(allItems, 50);
   await chrome.storage.session.set({ flashItems: items });
 }
 
@@ -49,8 +49,8 @@ async function getFlashItems(): Promise<DomainHistoryItems> {
 }
 
 async function getFullItems(): Promise<DomainHistoryItems> {
-  const [url, allItems] = await Promise.all([getCurrentUrl(), ensureItems()]);
-  return filterDomainItems(allItems, url);
+  const allItems = await ensureItems();
+  return createGlobalHistoryItems(allItems);
 }
 
 export async function getCurrentUrl(): Promise<string> {
@@ -100,6 +100,25 @@ function filterDomainItems(allItems: HistoryItem[], currentUrl: string, maxCount
     if (item.domain.sub === items.domain.sub) {
       items.sub.push(item);
     }
+  }
+  return items;
+}
+
+function createGlobalHistoryItems(allItems: HistoryItem[], maxCount?: number): DomainHistoryItems {
+  const items: DomainHistoryItems = createDomainHistoryItems();
+  const keySet = new Set<number>();
+  const urlSet = new Set<string>();
+
+  for (const item of allItems) {
+    if (maxCount && items.main.length >= maxCount) {
+      break;
+    }
+    if (keySet.has(item.key) || urlSet.has(item.url)) {
+      continue;
+    }
+    keySet.add(item.key);
+    urlSet.add(item.url);
+    items.main.push(item);
   }
   return items;
 }

@@ -1,6 +1,5 @@
 import { useEffect, useState, useMemo } from 'react';
 
-import { MatchMode, DEFAULT_MATCH_MODE, getMatchMode, updateMatchMode } from '@/common/mode';
 import { MessageKey, sendMessage } from '@/common/message';
 import { HistoryItem, DomainHistoryItems, createDomainHistoryItems } from '@/common/history';
 import HistoryItemList from '@/popup/component/HistoryItemList';
@@ -10,11 +9,10 @@ export default function App() {
   const [domainItems, setDomainItems] = useState<DomainHistoryItems>(createDomainHistoryItems());
   const [filterText, setFilterText] = useState('');
   const [highlightedUrlSet, setHighlightedUrlSet] = useState<Set<string>>(new Set());
-  const [matchMode, setMatchMode] = useState<MatchMode>(DEFAULT_MATCH_MODE);
 
   const allItems = useMemo<HistoryItem[]>(() => {
-    return matchMode === MatchMode.Strict && domainItems.domain.main ? domainItems.sub : domainItems.main;
-  }, [domainItems, matchMode]);
+    return domainItems.main;
+  }, [domainItems]);
 
   const filteredItems = useMemo<HistoryItem[]>(() => {
     const keywords = filterText.toLowerCase().trim().split(/\s+/).filter(Boolean);
@@ -42,27 +40,19 @@ export default function App() {
     const [flashDomainItems, tabUrls] = await Promise.all([getFlashItems(), getHighlightedUrlSet()]);
     setDomainItems(flashDomainItems);
     setHighlightedUrlSet(tabUrls);
-    setMatchMode(await getMatchMode(flashDomainItems.domain.main));
     setDomainItems(await getFullItems());
     setTimeout(() => {
       document.body.classList.add('ready');
     });
   }
 
-  async function toggleMatchMode() {
-    const newMode = matchMode === MatchMode.Strict ? MatchMode.Loose : MatchMode.Strict;
-    setMatchMode(newMode);
-    await updateMatchMode(domainItems.domain.main, newMode);
-  }
-
+  
   return (
     <div>
       <HistoryItemList items={filteredItems} total={allItems.length} highlightedUrlSet={highlightedUrlSet} />
       <FilterBar
         domain={domainItems.domain}
-        matchMode={matchMode}
         onTextChange={setFilterText}
-        onToggleMatchMode={toggleMatchMode}
       />
     </div>
   );
