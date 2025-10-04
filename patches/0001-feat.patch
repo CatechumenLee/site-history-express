@@ -1,0 +1,309 @@
+From a526e65b9a1383f4fcbaced63978300a87fe2ffe Mon Sep 17 00:00:00 2001
+From: Site History User <user@example.com>
+Date: Sat, 4 Oct 2025 11:13:38 +0800
+Subject: [PATCH] =?UTF-8?q?feat:=20=E6=98=BE=E7=A4=BA=E5=85=A8=E5=B1=80?=
+ =?UTF-8?q?=E5=8E=86=E5=8F=B2=E8=AE=B0=E5=BD=95=E8=80=8C=E9=9D=9E=E5=BD=93?=
+ =?UTF-8?q?=E5=89=8D=E7=BD=91=E7=AB=99=E8=AE=B0=E5=BD=95?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- 修改后台脚本，始终返回全局历史记录而不是基于当前域名过滤
+- 简化弹窗界面，移除域名匹配模式切换功能
+- 创建新的 createGlobalHistoryItems 函数处理全局历史记录
+- 更新 FilterBar 组件，移除匹配模式切换按钮
+- 添加 CLAUDE.md 文件，提供项目开发指导
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+---
+ CLAUDE.md                               | 67 +++++++++++++++++++++++++
+ src/background/index.ts                 | 27 ++++++++--
+ src/popup/App.tsx                       | 16 ++----
+ src/popup/component/FilterBar/index.tsx | 63 ++---------------------
+ 4 files changed, 97 insertions(+), 76 deletions(-)
+ create mode 100644 CLAUDE.md
+
+diff --git a/CLAUDE.md b/CLAUDE.md
+new file mode 100644
+index 0000000..777dc58
+--- /dev/null
++++ b/CLAUDE.md
+@@ -0,0 +1,67 @@
++# CLAUDE.md
++
++This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
++
++## 项目概述
++
++Site History Express 是一个浏览器扩展程序，用于显示当前网站或所有网站的浏览历史记录。该扩展使用 React + TypeScript + Tailwind CSS 开发，并通过 Rsbuild 构建。
++
++## 开发命令
++
++```bash
++# 启动开发服务器
++yarn dev
++
++# 构建扩展
++yarn build
++```
++
++## 项目架构
++
++### 构建配置
++- 使用 Rsbuild 作为构建工具，配置文件为 `rsbuild.config.ts`
++- 支持两个环境：
++  - `web`：构建弹窗界面 (popup)
++  - `webworker`：构建后台脚本 (background)
++
++### 核心模块
++
++#### 后台脚本 (`src/background/index.ts`)
++- 监听浏览器历史记录变化 (`chrome.history.onVisited`, `chrome.history.onVisitRemoved`)
++- 维护内存中的历史记录缓存，使用防抖优化性能
++- 提供两种数据获取方式：
++  - `getFlashItems()`：快速获取少量项目用于弹窗显示
++  - `getFullItems()`：获取完整的历史记录
++- 处理标签页切换和更新事件
++
++#### 弹窗界面 (`src/popup/`)
++- `App.tsx`：主组件，负责状态管理和数据获取
++- `HistoryItemList`：历史记录列表组件，支持虚拟滚动
++- `FilterBar`：过滤和搜索组件
++
++#### 公共模块 (`src/common/`)
++- `history.ts`：历史记录数据结构和获取逻辑
++- `url.ts`：URL 处理和域名解析
++- `mode.ts`：匹配模式管理（严格模式/宽松模式）
++- `message.ts`：前后台通信接口
++- `hash.ts`：哈希计算工具
++- `stream.ts`：防抖等流处理工具
++
++### 数据流
++1. 后台脚本监听历史记录变化，更新内存缓存
++2. 弹窗打开时，先从 `chrome.storage.session` 获取预加载的少量数据快速显示
++3. 然后通过消息通信从后台脚本获取完整数据
++4. 支持基于当前网站的域名过滤和关键词搜索
++
++### 浏览器扩展配置
++- `manifest.json`：扩展配置文件，定义权限和入口点
++- 支持多语言：英语、简体中文、日语
++- 权限：`tabs`, `history`, `storage`, `favicon`
++
++## 开发注意事项
++
++- 该项目是浏览器扩展，需要了解 Chrome Extension API
++- 虚拟滚动使用 `react-virtualized` 库处理大量历史记录
++- 前后台通信通过 `chrome.runtime.sendMessage` 进行
++- 历史记录数据经过去重处理，使用 URL 和标题的哈希值作为唯一标识
++- 匹配模式会保存在 `chrome.storage.sync` 中，支持跨设备同步
+\ No newline at end of file
+diff --git a/src/background/index.ts b/src/background/index.ts
+index 59becc8..d868126 100644
+--- a/src/background/index.ts
++++ b/src/background/index.ts
+@@ -36,8 +36,8 @@ chrome.tabs.onUpdated.addListener(prepareFlashItemsDebounced);
+ prepareFlashItemsDebounced();
+ 
+ async function prepareFlashItems() {
+-  const [url, allItems] = await Promise.all([getCurrentUrl(), ensureItems()]);
+-  const items = filterDomainItems(allItems, url, 50);
++  const allItems = await ensureItems();
++  const items = createGlobalHistoryItems(allItems, 50);
+   await chrome.storage.session.set({ flashItems: items });
+ }
+ 
+@@ -49,8 +49,8 @@ async function getFlashItems(): Promise<DomainHistoryItems> {
+ }
+ 
+ async function getFullItems(): Promise<DomainHistoryItems> {
+-  const [url, allItems] = await Promise.all([getCurrentUrl(), ensureItems()]);
+-  return filterDomainItems(allItems, url);
++  const allItems = await ensureItems();
++  return createGlobalHistoryItems(allItems);
+ }
+ 
+ export async function getCurrentUrl(): Promise<string> {
+@@ -104,6 +104,25 @@ function filterDomainItems(allItems: HistoryItem[], currentUrl: string, maxCount
+   return items;
+ }
+ 
++function createGlobalHistoryItems(allItems: HistoryItem[], maxCount?: number): DomainHistoryItems {
++  const items: DomainHistoryItems = createDomainHistoryItems();
++  const keySet = new Set<number>();
++  const urlSet = new Set<string>();
++
++  for (const item of allItems) {
++    if (maxCount && items.main.length >= maxCount) {
++      break;
++    }
++    if (keySet.has(item.key) || urlSet.has(item.url)) {
++      continue;
++    }
++    keySet.add(item.key);
++    urlSet.add(item.url);
++    items.main.push(item);
++  }
++  return items;
++}
++
+ chrome.runtime.onMessage.addListener((message, sender, send) => {
+   switch (message.key) {
+     case MessageKey.GetFlashItems:
+diff --git a/src/popup/App.tsx b/src/popup/App.tsx
+index 0d2c5fa..3498fa8 100644
+--- a/src/popup/App.tsx
++++ b/src/popup/App.tsx
+@@ -1,6 +1,5 @@
+ import { useEffect, useState, useMemo } from 'react';
+ 
+-import { MatchMode, DEFAULT_MATCH_MODE, getMatchMode, updateMatchMode } from '@/common/mode';
+ import { MessageKey, sendMessage } from '@/common/message';
+ import { HistoryItem, DomainHistoryItems, createDomainHistoryItems } from '@/common/history';
+ import HistoryItemList from '@/popup/component/HistoryItemList';
+@@ -10,11 +9,10 @@ export default function App() {
+   const [domainItems, setDomainItems] = useState<DomainHistoryItems>(createDomainHistoryItems());
+   const [filterText, setFilterText] = useState('');
+   const [highlightedUrlSet, setHighlightedUrlSet] = useState<Set<string>>(new Set());
+-  const [matchMode, setMatchMode] = useState<MatchMode>(DEFAULT_MATCH_MODE);
+ 
+   const allItems = useMemo<HistoryItem[]>(() => {
+-    return matchMode === MatchMode.Strict && domainItems.domain.main ? domainItems.sub : domainItems.main;
+-  }, [domainItems, matchMode]);
++    return domainItems.main;
++  }, [domainItems]);
+ 
+   const filteredItems = useMemo<HistoryItem[]>(() => {
+     const keywords = filterText.toLowerCase().trim().split(/\s+/).filter(Boolean);
+@@ -42,27 +40,19 @@ export default function App() {
+     const [flashDomainItems, tabUrls] = await Promise.all([getFlashItems(), getHighlightedUrlSet()]);
+     setDomainItems(flashDomainItems);
+     setHighlightedUrlSet(tabUrls);
+-    setMatchMode(await getMatchMode(flashDomainItems.domain.main));
+     setDomainItems(await getFullItems());
+     setTimeout(() => {
+       document.body.classList.add('ready');
+     });
+   }
+ 
+-  async function toggleMatchMode() {
+-    const newMode = matchMode === MatchMode.Strict ? MatchMode.Loose : MatchMode.Strict;
+-    setMatchMode(newMode);
+-    await updateMatchMode(domainItems.domain.main, newMode);
+-  }
+-
++  
+   return (
+     <div>
+       <HistoryItemList items={filteredItems} total={allItems.length} highlightedUrlSet={highlightedUrlSet} />
+       <FilterBar
+         domain={domainItems.domain}
+-        matchMode={matchMode}
+         onTextChange={setFilterText}
+-        onToggleMatchMode={toggleMatchMode}
+       />
+     </div>
+   );
+diff --git a/src/popup/component/FilterBar/index.tsx b/src/popup/component/FilterBar/index.tsx
+index fe2c3ec..2db468c 100644
+--- a/src/popup/component/FilterBar/index.tsx
++++ b/src/popup/component/FilterBar/index.tsx
+@@ -1,28 +1,20 @@
+ import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+ 
+-import { MatchMode } from '@/common/mode';
+ import { Domain } from '@/common/url';
+ import { debounce } from '@/common/stream';
+ import { i18n } from '@/common/i18n';
+ 
+ export interface Props {
+   domain: Domain;
+-  matchMode: MatchMode;
++  matchMode?: any;
+   onTextChange: (text: string) => void;
+-  onToggleMatchMode: () => void;
++  onToggleMatchMode?: () => void;
+ }
+ 
+ export default function FilterBar({ domain, matchMode, onTextChange, onToggleMatchMode }: Props) {
+-  const canToggleMatchMode = useMemo(() => !!domain.main, [domain]);
+   const placeholder = useMemo(() => {
+-    if (!domain.main) {
+-      return i18n.filterGlobalPlaceholder;
+-    }
+-    if (matchMode === MatchMode.Strict) {
+-      return i18n.filterPlaceholder(domain.sub ? `${domain.sub}.${domain.main}` : domain.main);
+-    }
+-    return i18n.filterPlaceholder(`*.${domain.main}`);
+-  }, [domain, matchMode]);
++    return i18n.filterGlobalPlaceholder;
++  }, []);
+ 
+   const [text, setText] = useState('');
+   const debouncedUpdate = useCallback(debounce(onTextChange, 300), []);
+@@ -41,11 +33,6 @@ export default function FilterBar({ domain, matchMode, onTextChange, onToggleMat
+     inputRef.current?.focus();
+   }, []);
+ 
+-  function handleBtnClick() {
+-    inputRef.current?.focus();
+-    onToggleMatchMode();
+-  }
+-
+   return (
+     <div className='flex items-center h-[40px] border-t border-[--color-border] shadow-lg shadow-[--color-text]'>
+       <input
+@@ -60,49 +47,7 @@ export default function FilterBar({ domain, matchMode, onTextChange, onToggleMat
+         onChange={handleTextChange}
+         onClick={() => setShouldHideCaret(false)}
+       />
+-      {canToggleMatchMode && (
+-        <button className='h-full p-3 outline-none opacity-30 hover:opacity-50' onClick={handleBtnClick}>
+-          {matchMode === MatchMode.Strict ? <StrictModeSvg /> : <LooseModeSvg />}
+-        </button>
+-      )}
+     </div>
+   );
+ }
+ 
+-function StrictModeSvg() {
+-  return (
+-    <svg
+-      style={{ width: '16px', height: '16px' }}
+-      fill='none'
+-      stroke='currentColor'
+-      viewBox='0 0 24 24'
+-      xmlns='http://www.w3.org/2000/svg'
+-    >
+-      <path
+-        strokeLinecap='round'
+-        strokeLinejoin='round'
+-        strokeWidth='2'
+-        d='M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4'
+-      ></path>
+-    </svg>
+-  );
+-}
+-
+-function LooseModeSvg() {
+-  return (
+-    <svg
+-      style={{ width: '16px', height: '16px' }}
+-      fill='none'
+-      stroke='currentColor'
+-      viewBox='0 0 24 24'
+-      xmlns='http://www.w3.org/2000/svg'
+-    >
+-      <path
+-        strokeLinecap='round'
+-        strokeLinejoin='round'
+-        strokeWidth='2'
+-        d='M14 10l-2 1m0 0l-2-1m2 1v2.5M20 7l-2 1m2-1l-2-1m2 1v2.5M14 4l-2-1-2 1M4 7l2-1M4 7l2 1M4 7v2.5M12 21l-2-1m2 1l2-1m-2 1v-2.5M6 18l-2-1v-2.5M18 18l2-1v-2.5'
+-      ></path>
+-    </svg>
+-  );
+-}
+-- 
+2.51.0.windows.1
+
